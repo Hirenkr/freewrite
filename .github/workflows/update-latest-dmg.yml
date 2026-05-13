@@ -1,0 +1,67 @@
+name: Update latest DMG
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-dmg:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build release app
+        run: |
+          xcodebuild \
+            -project freewrite.xcodeproj \
+            -scheme freewrite \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+
+          app_path="build/DerivedData/Build/Products/Release/freewrite.app"
+          dmg_root="dist/dmg-root"
+          dmg_path="dist/Freewrite-mac.dmg"
+
+          rm -rf dist
+          mkdir -p "$dmg_root"
+          cp -R "$app_path" "$dmg_root/freewrite.app"
+          ln -s /Applications "$dmg_root/Applications"
+
+          hdiutil create \
+            -volname "Freewrite" \
+            -srcfolder "$dmg_root" \
+            -ov \
+            -format UDZO \
+            "$dmg_path"
+
+      - name: Publish latest release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest dist/Freewrite-mac.dmg --clobber
+          else
+            gh release create latest dist/Freewrite-mac.dmg \
+              --title "Freewrite latest" \
+              --notes "Latest macOS DMG build."
+          fi
