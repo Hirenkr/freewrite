@@ -95,7 +95,10 @@ struct ContentView: View {
     @State private var isHoveringFullscreen = false
     @State private var hoveredFont: String? = nil
     @State private var isHoveringSize = false
+    @State private var isHoveringParagraphSpacingUp = false
+    @State private var isHoveringParagraphSpacingDown = false
     @State private var fontSize: CGFloat = 18
+    @State private var paragraphSpacingLevel: Int = 1
     @State private var blinkCount = 0
     @State private var isBlinking = false
     @State private var opacity: Double = 1.0
@@ -143,6 +146,7 @@ struct ContentView: View {
     let availableFonts = NSFontManager.shared.availableFontFamilies
     let standardFonts = ["Lato-Regular", "Arial", ".AppleSystemUIFont", "Times New Roman"]
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
+    let paragraphSpacingMultipliers: [CGFloat] = [0.8, 1.25, 1.75, 2.25]
     let placeholderOptions = [
         "Begin writing",
         "Pick a thought and go",
@@ -847,9 +851,76 @@ struct ContentView: View {
         let defaultLineHeight = getLineHeight(font: font)
         return (fontSize * 1.5) - defaultLineHeight
     }
+
+    var paragraphSpacing: CGFloat {
+        let clampedLevel = min(max(paragraphSpacingLevel, 0), paragraphSpacingMultipliers.count - 1)
+        return fontSize * paragraphSpacingMultipliers[clampedLevel]
+    }
+
+    private func editorParagraphStyle() -> NSMutableParagraphStyle {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineHeight
+        paragraphStyle.paragraphSpacing = paragraphSpacing
+        return paragraphStyle
+    }
+
+    private func configureEditorTypingStyle(_ textView: NSTextView) {
+        let paragraphStyle = editorParagraphStyle()
+        textView.defaultParagraphStyle = paragraphStyle
+        textView.typingAttributes[.paragraphStyle] = paragraphStyle
+    }
+
+    private func insertStyledParagraphBreak(in textView: NSTextView) {
+        configureEditorTypingStyle(textView)
+        textView.insertText("\n", replacementRange: textView.selectedRange())
+        configureEditorTypingStyle(textView)
+
+        let insertionRange = textView.selectedRange()
+        let paragraphLocation = min(insertionRange.location, max(textView.string.utf16.count - 1, 0))
+        let paragraphRange = (textView.string as NSString).paragraphRange(
+            for: NSRange(location: paragraphLocation, length: 0)
+        )
+        if paragraphRange.location != NSNotFound, paragraphRange.length > 0 {
+            textView.textStorage?.addAttribute(.paragraphStyle, value: editorParagraphStyle(), range: paragraphRange)
+        }
+        textView.setSelectedRange(insertionRange)
+        textView.scrollRangeToVisible(insertionRange)
+    }
+
+    private func applyEditorParagraphSpacing(to textView: NSTextView) {
+        configureEditorTypingStyle(textView)
+
+        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
+        guard fullRange.length > 0 else {
+            return
+        }
+
+        let selectedRange = textView.selectedRange()
+        textView.textStorage?.addAttribute(.paragraphStyle, value: editorParagraphStyle(), range: fullRange)
+
+        if let layoutManager = textView.layoutManager,
+           let textContainer = textView.textContainer {
+            layoutManager.ensureLayout(for: textContainer)
+        }
+
+        textView.setSelectedRange(selectedRange)
+        let scrollLocation = min(selectedRange.location, max(textView.string.utf16.count - 1, 0))
+        let scrollLength = textView.string.isEmpty ? 0 : 1
+        textView.scrollRangeToVisible(NSRange(location: scrollLocation, length: scrollLength))
+        DispatchQueue.main.async {
+            textView.scrollRangeToVisible(NSRange(location: scrollLocation, length: scrollLength))
+        }
+    }
     
     var fontSizeButtonTitle: String {
         return "\(Int(fontSize))px"
+    }
+
+    private func updateCurrentEditorParagraphSpacing() {
+        guard let textView = NSApp.keyWindow?.contentView?.findSubview(ofType: NSTextView.self) else {
+            return
+        }
+        applyEditorParagraphSpacing(to: textView)
     }
     
     // Add a color utility computed property
@@ -863,10 +934,13 @@ struct ContentView: View {
 
     
     var body: some View {
-        let buttonBackground = colorScheme == .light ? Color.white : Color.black
         let navHeight: CGFloat = 68
         let textColor = colorScheme == .light ? Color.gray : Color.gray.opacity(0.8)
         let textHoverColor = colorScheme == .light ? Color.black : Color.white
+        let editorTextColor = colorScheme == .light
+            ? NSColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1)
+            : NSColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1)
+        let editorBackgroundColor = colorScheme == .light ? NSColor.white : NSColor.black
         let isViewingVideoEntry = currentVideoURL != nil
         
         HStack(spacing: 0) {
@@ -886,31 +960,23 @@ struct ContentView: View {
                         .ignoresSafeArea(edges: .top)
                 } else {
                     // Show text editor for text entries
-                    TextEditor(text: $text)
+                    StyledTextEditor(
+                        text: $text,
+                        fontName: selectedFont,
+                        fontSize: fontSize,
+                        textColor: editorTextColor,
+                        backgroundColor: editorBackgroundColor,
+                        lineSpacing: lineHeight,
+                        paragraphSpacing: paragraphSpacing,
+                        backspaceDisabled: backspaceDisabled
+                    )
                     .background(Color(colorScheme == .light ? .white : .black))
-                    .font(.custom(selectedFont, size: fontSize))
-                    .foregroundColor(colorScheme == .light ? Color(red: 0.20, green: 0.20, blue: 0.20) : Color(red: 0.9, green: 0.9, blue: 0.9))
-                    .scrollContentBackground(.hidden)
-                    .scrollIndicators(.never)
-                    .lineSpacing(lineHeight)
                     .frame(maxWidth: 650)
                     .padding(.top, 40)
-                    .id("\(selectedFont)-\(fontSize)-\(colorScheme)")
                     .padding(.bottom, bottomNavOpacity > 0 ? navHeight : 0)
                     .colorScheme(colorScheme)
                     .onAppear {
                         placeholderText = placeholderOptions.randomElement() ?? "Begin writing"
-                        // Removed findSubview code which was causing errors
-
-                        // Add keyboard monitor for backspace/delete keys
-                        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                            // Check if backspace is disabled and the key is delete/backspace
-                            if backspaceDisabled && (event.keyCode == 51 || event.keyCode == 117) {
-                                // Block the backspace/delete key
-                                return nil
-                            }
-                            return event
-                        }
                     }
                     .overlay(
                         ZStack(alignment: .topLeading) {
@@ -974,6 +1040,51 @@ struct ContentView: View {
                                         NSCursor.pointingHand.push()
                                     } else {
                                         NSCursor.pop()
+                                    }
+                                }
+
+                                Text("•")
+                                    .foregroundColor(.gray)
+
+                                HStack(spacing: 2) {
+                                    Button(action: {
+                                        paragraphSpacingLevel = min(paragraphSpacingLevel + 1, paragraphSpacingMultipliers.count - 1)
+                                        FreewriteTextView.focusActiveEditor()
+                                    }) {
+                                        Image(systemName: "arrow.up")
+                                            .foregroundColor(isHoveringParagraphSpacingUp ? textHoverColor : textColor)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .focusable(false)
+                                    .help("Increase paragraph spacing")
+                                    .onHover { hovering in
+                                        isHoveringParagraphSpacingUp = hovering
+                                        isHoveringBottomNav = hovering || isHoveringParagraphSpacingDown
+                                        if hovering {
+                                            NSCursor.pointingHand.push()
+                                        } else {
+                                            NSCursor.pop()
+                                        }
+                                    }
+
+                                    Button(action: {
+                                        paragraphSpacingLevel = max(paragraphSpacingLevel - 1, 0)
+                                        FreewriteTextView.focusActiveEditor()
+                                    }) {
+                                        Image(systemName: "arrow.down")
+                                            .foregroundColor(isHoveringParagraphSpacingDown ? textHoverColor : textColor)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .focusable(false)
+                                    .help("Decrease paragraph spacing")
+                                    .onHover { hovering in
+                                        isHoveringParagraphSpacingDown = hovering
+                                        isHoveringBottomNav = hovering || isHoveringParagraphSpacingUp
+                                        if hovering {
+                                            NSCursor.pointingHand.push()
+                                        } else {
+                                            NSCursor.pop()
+                                        }
                                     }
                                 }
                                 
@@ -1363,7 +1474,7 @@ struct ContentView: View {
                                 .cornerRadius(8)
                                 .shadow(color: Color.black.opacity(0.1), radius: 4, y: 2)
                                 // Reset copied state when popover dismisses
-                                .onChange(of: showingChatMenu) { newValue in
+                                .onChange(of: showingChatMenu) { _, newValue in
                                     if !newValue {
                                         didCopyPrompt = false
                                     }
@@ -1716,7 +1827,7 @@ struct ContentView: View {
                 clearVideoRecordingPreparationState()
             }
         }
-        .onChange(of: text) { _ in
+        .onChange(of: text) { _, _ in
             // Save current entry when text changes
             if let currentId = selectedEntryId,
                let currentEntry = entries.first(where: { $0.id == currentId }),
@@ -2221,6 +2332,250 @@ func getLineHeight(font: NSFont) -> CGFloat {
     return font.ascender - font.descender + font.leading
 }
 
+struct StyledTextEditor: NSViewRepresentable {
+    @Binding var text: String
+
+    let fontName: String
+    let fontSize: CGFloat
+    let textColor: NSColor
+    let backgroundColor: NSColor
+    let lineSpacing: CGFloat
+    let paragraphSpacing: CGFloat
+    let backspaceDisabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+
+        let textView = FreewriteTextView()
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.importsGraphics = false
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: .greatestFiniteMagnitude)
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+
+        scrollView.documentView = textView
+        configure(textView, context: context)
+        applyAttributesToAllText(in: textView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? FreewriteTextView else {
+            return
+        }
+
+        configure(textView, context: context)
+
+        var shouldRestyle = false
+        if textView.string != text {
+            context.coordinator.isApplyingProgrammaticChange = true
+            let selectedRange = textView.selectedRange()
+            textView.string = text
+            textView.setSelectedRange(NSRange(location: min(selectedRange.location, text.utf16.count), length: 0))
+            context.coordinator.isApplyingProgrammaticChange = false
+            shouldRestyle = true
+        }
+
+        let styleKey = context.coordinator.styleKey(
+            fontName: fontName,
+            fontSize: fontSize,
+            textColor: textColor,
+            backgroundColor: backgroundColor,
+            lineSpacing: lineSpacing,
+            paragraphSpacing: paragraphSpacing
+        )
+        if context.coordinator.lastStyleKey != styleKey {
+            context.coordinator.lastStyleKey = styleKey
+            shouldRestyle = true
+        }
+
+        if shouldRestyle {
+            applyAttributesToAllText(in: textView)
+        }
+        textView.applyTypingAttributes()
+    }
+
+    private func configure(_ textView: FreewriteTextView, context: Context) {
+        let font = NSFont(name: fontName, size: fontSize) ?? .systemFont(ofSize: fontSize)
+        textView.freewriteFont = font
+        textView.freewriteTextColor = textColor
+        textView.freewriteBackgroundColor = backgroundColor
+        textView.freewriteParagraphStyle = paragraphStyle()
+        textView.backspaceDisabled = backspaceDisabled
+        textView.backgroundColor = backgroundColor
+        textView.font = font
+        textView.textColor = textColor
+        textView.applyTypingAttributes()
+    }
+
+    private func paragraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.paragraphSpacing = paragraphSpacing
+        return style
+    }
+
+    private func applyAttributesToAllText(in textView: FreewriteTextView) {
+        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
+        guard fullRange.length > 0 else {
+            return
+        }
+
+        let selectedRange = textView.selectedRange()
+        textView.textStorage?.setAttributes(textView.currentTypingAttributes, range: fullRange)
+        textView.setSelectedRange(selectedRange)
+        textView.scrollRangeToVisible(selectedRange)
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        @Binding var text: String
+        var isApplyingProgrammaticChange = false
+        var lastStyleKey = ""
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingProgrammaticChange,
+                  let textView = notification.object as? NSTextView else {
+                return
+            }
+            text = textView.string
+        }
+
+        func styleKey(
+            fontName: String,
+            fontSize: CGFloat,
+            textColor: NSColor,
+            backgroundColor: NSColor,
+            lineSpacing: CGFloat,
+            paragraphSpacing: CGFloat
+        ) -> String {
+            [
+                fontName,
+                "\(fontSize)",
+                "\(textColor.hash)",
+                "\(backgroundColor.hash)",
+                "\(lineSpacing)",
+                "\(paragraphSpacing)"
+            ].joined(separator: "|")
+        }
+    }
+}
+
+final class FreewriteTextView: NSTextView {
+    private static weak var activeEditor: FreewriteTextView?
+
+    var freewriteFont: NSFont = .systemFont(ofSize: 18)
+    var freewriteTextColor: NSColor = .textColor
+    var freewriteBackgroundColor: NSColor = .textBackgroundColor
+    var freewriteParagraphStyle: NSParagraphStyle = NSParagraphStyle.default
+    var backspaceDisabled = false
+
+    var currentTypingAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: freewriteFont,
+            .foregroundColor: freewriteTextColor,
+            .paragraphStyle: freewriteParagraphStyle
+        ]
+    }
+
+    func applyTypingAttributes() {
+        defaultParagraphStyle = freewriteParagraphStyle
+        typingAttributes = currentTypingAttributes
+    }
+
+    static func focusActiveEditor() {
+        DispatchQueue.main.async {
+            guard let editor = activeEditor else {
+                return
+            }
+            editor.window?.makeFirstResponder(editor)
+            editor.applyTypingAttributes()
+            editor.scrollRangeToVisible(editor.selectedRange())
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            Self.activeEditor = self
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder {
+            Self.activeEditor = self
+            applyTypingAttributes()
+        }
+        return becameFirstResponder
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if backspaceDisabled && (event.keyCode == 51 || event.keyCode == 117) {
+            return
+        }
+
+        if event.keyCode == 36 || event.keyCode == 76 {
+            applyTypingAttributes()
+            if event.modifierFlags.contains(.shift) {
+                insertText("\u{2028}", replacementRange: selectedRange())
+            } else {
+                insertText("\n", replacementRange: selectedRange())
+            }
+            applyTypingAttributes()
+            scrollRangeToVisible(selectedRange())
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+}
+
+struct TextEditorConfigurator: NSViewRepresentable {
+    let configure: (NSTextView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let textView = view.findTextViewInHierarchy() {
+                configure(textView)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let textView = nsView.findTextViewInHierarchy() {
+                configure(textView)
+            }
+        }
+    }
+}
+
 // Add helper extension to find NSTextView
 extension NSView {
     func findTextView() -> NSView? {
@@ -2248,6 +2603,17 @@ extension NSView {
             }
         }
         return nil
+    }
+
+    func findTextViewInHierarchy() -> NSTextView? {
+        var currentView: NSView? = self
+        while let view = currentView {
+            if let textView = view.findSubview(ofType: NSTextView.self) {
+                return textView
+            }
+            currentView = view.superview
+        }
+        return window?.contentView?.findSubview(ofType: NSTextView.self)
     }
 }
 
