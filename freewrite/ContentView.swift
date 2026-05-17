@@ -2375,7 +2375,7 @@ struct StyledTextEditor: NSViewRepresentable {
 
         scrollView.documentView = textView
         configure(textView, context: context)
-        applyAttributesToAllText(in: textView)
+        textView.applyFreewriteAttributesToAllText()
         return scrollView
     }
 
@@ -2410,7 +2410,7 @@ struct StyledTextEditor: NSViewRepresentable {
         }
 
         if shouldRestyle {
-            applyAttributesToAllText(in: textView)
+            textView.applyFreewriteAttributesToAllText()
         }
         textView.applyTypingAttributes()
     }
@@ -2435,18 +2435,6 @@ struct StyledTextEditor: NSViewRepresentable {
         return style
     }
 
-    private func applyAttributesToAllText(in textView: FreewriteTextView) {
-        let fullRange = NSRange(location: 0, length: textView.string.utf16.count)
-        guard fullRange.length > 0 else {
-            return
-        }
-
-        let selectedRange = textView.selectedRange()
-        textView.textStorage?.setAttributes(textView.currentTypingAttributes, range: fullRange)
-        textView.setSelectedRange(selectedRange)
-        textView.scrollRangeToVisible(selectedRange)
-    }
-
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         var isApplyingProgrammaticChange = false
@@ -2458,10 +2446,12 @@ struct StyledTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !isApplyingProgrammaticChange,
-                  let textView = notification.object as? NSTextView else {
+                  let textView = notification.object as? FreewriteTextView else {
                 return
             }
             text = textView.string
+            textView.applyFreewriteAttributesToAllText()
+            textView.applyTypingAttributes()
         }
 
         func styleKey(
@@ -2493,12 +2483,75 @@ final class FreewriteTextView: NSTextView {
     var freewriteParagraphStyle: NSParagraphStyle = NSParagraphStyle.default
     var backspaceDisabled = false
 
-    var currentTypingAttributes: [NSAttributedString.Key: Any] {
+    private var baseTextAttributes: [NSAttributedString.Key: Any] {
         [
             .font: freewriteFont,
             .foregroundColor: freewriteTextColor,
             .paragraphStyle: freewriteParagraphStyle
         ]
+    }
+
+    private var headingTextAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: headingFont,
+            .foregroundColor: freewriteTextColor,
+            .paragraphStyle: freewriteParagraphStyle
+        ]
+    }
+
+    private var headingFont: NSFont {
+        let convertedFont = NSFontManager.shared.convert(freewriteFont, toHaveTrait: .boldFontMask)
+        if convertedFont.fontDescriptor.symbolicTraits.contains(.bold) {
+            return convertedFont
+        }
+        if freewriteFont.familyName == NSFont.systemFont(ofSize: freewriteFont.pointSize).familyName {
+            return .systemFont(ofSize: freewriteFont.pointSize, weight: .bold)
+        }
+        return NSFont(name: "Lato-Bold", size: freewriteFont.pointSize)
+            ?? .boldSystemFont(ofSize: freewriteFont.pointSize)
+    }
+
+    var currentTypingAttributes: [NSAttributedString.Key: Any] {
+        isSelectedRangeInHeading ? headingTextAttributes : baseTextAttributes
+    }
+
+    private var headingRange: NSRange {
+        let fullText = string as NSString
+        guard fullText.length > 0 else {
+            return NSRange(location: 0, length: 0)
+        }
+
+        let firstLineBreak = fullText.rangeOfCharacter(from: .newlines)
+        let headingLength = firstLineBreak.location == NSNotFound ? fullText.length : firstLineBreak.location
+        return NSRange(location: 0, length: headingLength)
+    }
+
+    private var isSelectedRangeInHeading: Bool {
+        let range = headingRange
+        guard range.length > 0 else {
+            return true
+        }
+        return selectedRange().location <= range.location + range.length
+    }
+
+    func applyFreewriteAttributesToAllText() {
+        let fullRange = NSRange(location: 0, length: (string as NSString).length)
+        guard fullRange.length > 0 else {
+            return
+        }
+
+        let selectedRange = selectedRange()
+        textStorage?.beginEditing()
+        textStorage?.setAttributes(baseTextAttributes, range: fullRange)
+
+        let range = headingRange
+        if range.length > 0 {
+            textStorage?.setAttributes(headingTextAttributes, range: range)
+        }
+
+        textStorage?.endEditing()
+        setSelectedRange(selectedRange)
+        scrollRangeToVisible(selectedRange)
     }
 
     func applyTypingAttributes() {
