@@ -40,6 +40,9 @@ jobs:
           rm -rf dist
           mkdir -p "$dmg_root"
           cp -R "$app_path" "$dmg_root/freewrite.app"
+          codesign --force --deep --sign - \
+            --entitlements freewrite/freewrite.entitlements \
+            "$dmg_root/freewrite.app"
           ln -s /Applications "$dmg_root/Applications"
 
           hdiutil create \
