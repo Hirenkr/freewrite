@@ -22,8 +22,10 @@ struct freewriteApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .toolbar(.hidden, for: .windowToolbar)
                 .preferredColorScheme(colorSchemeString == "dark" ? .dark : .light)
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1100, height: 600)
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.contentSize)
