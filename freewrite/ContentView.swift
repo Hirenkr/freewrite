@@ -98,7 +98,7 @@ struct ContentView: View {
     @State private var isHoveringParagraphSpacingUp = false
     @State private var isHoveringParagraphSpacingDown = false
     @State private var fontSize: CGFloat = 18
-    @State private var paragraphSpacingLevel: Int = 1
+    @State private var paragraphSpacingLevel: Int = 3
     @State private var blinkCount = 0
     @State private var isBlinking = false
     @State private var opacity: Double = 1.0
@@ -146,7 +146,7 @@ struct ContentView: View {
     let availableFonts = NSFontManager.shared.availableFontFamilies
     let standardFonts = ["Lato-Regular", "Arial", ".AppleSystemUIFont", "Times New Roman"]
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
-    let paragraphSpacingMultipliers: [CGFloat] = [0.8, 1.25, 1.75, 2.25]
+    let paragraphSpacingMultipliers: [CGFloat] = [0.4, 0.6, 0.8, 1.25, 1.75, 2.25]
     let placeholderOptions = [
         "Begin writing",
         "Pick a thought and go",
