@@ -2375,7 +2375,7 @@ struct StyledTextEditor: NSViewRepresentable {
 
         scrollView.documentView = textView
         configure(textView, context: context)
-        textView.applyFreewriteAttributesToAllText()
+        textView.applyFreewriteAttributesToAllText(preservingScrollPosition: false)
         return scrollView
     }
 
@@ -2532,13 +2532,15 @@ final class FreewriteTextView: NSTextView {
         return selectedRange().location <= range.location + range.length
     }
 
-    func applyFreewriteAttributesToAllText() {
+    func applyFreewriteAttributesToAllText(preservingScrollPosition: Bool = true) {
         let fullRange = NSRange(location: 0, length: (string as NSString).length)
         guard fullRange.length > 0 else {
             return
         }
 
         let selectedRange = selectedRange()
+        let clipView = preservingScrollPosition ? enclosingScrollView?.contentView : nil
+        let visibleOrigin = clipView?.bounds.origin
         textStorage?.beginEditing()
         textStorage?.setAttributes(baseTextAttributes, range: fullRange)
 
@@ -2549,7 +2551,23 @@ final class FreewriteTextView: NSTextView {
 
         textStorage?.endEditing()
         setSelectedRange(selectedRange)
-        scrollRangeToVisible(selectedRange)
+
+        guard let clipView, let visibleOrigin else {
+            return
+        }
+
+        restoreVisibleOrigin(visibleOrigin, in: clipView)
+        DispatchQueue.main.async { [weak self, weak clipView] in
+            guard let self, let clipView else {
+                return
+            }
+            self.restoreVisibleOrigin(visibleOrigin, in: clipView)
+        }
+    }
+
+    private func restoreVisibleOrigin(_ origin: NSPoint, in clipView: NSClipView) {
+        clipView.scroll(to: origin)
+        enclosingScrollView?.reflectScrolledClipView(clipView)
     }
 
     func applyTypingAttributes() {
