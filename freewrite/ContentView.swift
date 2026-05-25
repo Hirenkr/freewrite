@@ -2423,8 +2423,6 @@ struct StyledTextEditor: NSViewRepresentable {
         textView.freewriteParagraphStyle = paragraphStyle()
         textView.backspaceDisabled = backspaceDisabled
         textView.backgroundColor = backgroundColor
-        textView.font = font
-        textView.textColor = textColor
         textView.applyTypingAttributes()
     }
 
