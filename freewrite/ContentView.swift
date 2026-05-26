@@ -1835,6 +1835,9 @@ struct ContentView: View {
                 saveEntry(entry: currentEntry)
             }
         }
+        .onChange(of: showingSidebar) { _, _ in
+            FreewriteTextView.adjustActiveEditorForCurrentLayout()
+        }
         .onReceive(timer) { _ in
             if timerIsRunning && timeRemaining > 0 {
                 timeRemaining -= 1
@@ -2354,7 +2357,7 @@ struct StyledTextEditor: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 120, right: 0)
 
         let textView = FreewriteTextView()
         textView.delegate = context.coordinator
@@ -2415,6 +2418,7 @@ struct StyledTextEditor: NSViewRepresentable {
             textView.applyFreewriteAttributesToAllText()
         }
         textView.applyTypingAttributes()
+        textView.scheduleScrollSelectionAboveBottomControlsIfNeeded()
     }
 
     private func configure(_ textView: FreewriteTextView, context: Context) {
@@ -2459,6 +2463,7 @@ struct StyledTextEditor: NSViewRepresentable {
                 textView.applyFreewriteAttributesToAllText()
             }
             textView.applyTypingAttributes()
+            textView.scrollSelectionAboveBottomControlsIfNeeded()
         }
 
         private func shouldRestyleAfterUserEdit(previousText: String, newText: String) -> Bool {
@@ -2504,6 +2509,7 @@ struct StyledTextEditor: NSViewRepresentable {
 
 final class FreewriteTextView: NSTextView {
     private static weak var activeEditor: FreewriteTextView?
+    private let bottomDocumentPadding: CGFloat = 140
 
     var freewriteFont: NSFont = .systemFont(ofSize: 18)
     var freewriteTextColor: NSColor = .textColor
@@ -2593,7 +2599,13 @@ final class FreewriteTextView: NSTextView {
             }
             editor.window?.makeFirstResponder(editor)
             editor.applyTypingAttributes()
-            editor.scrollRangeToVisible(editor.selectedRange())
+            editor.scrollSelectionAboveBottomControlsIfNeeded()
+        }
+    }
+
+    static func adjustActiveEditorForCurrentLayout() {
+        DispatchQueue.main.async {
+            activeEditor?.scheduleScrollSelectionAboveBottomControlsIfNeeded()
         }
     }
 
@@ -2601,6 +2613,7 @@ final class FreewriteTextView: NSTextView {
         super.viewDidMoveToWindow()
         if window != nil {
             Self.activeEditor = self
+            scheduleScrollSelectionAboveBottomControlsIfNeeded()
         }
     }
 
@@ -2609,6 +2622,7 @@ final class FreewriteTextView: NSTextView {
         if becameFirstResponder {
             Self.activeEditor = self
             applyTypingAttributes()
+            scheduleScrollSelectionAboveBottomControlsIfNeeded()
         }
         return becameFirstResponder
     }
@@ -2626,11 +2640,87 @@ final class FreewriteTextView: NSTextView {
                 insertText("\n", replacementRange: selectedRange())
             }
             applyTypingAttributes()
-            scrollRangeToVisible(selectedRange())
+            scrollSelectionAboveBottomControlsIfNeeded()
             return
         }
 
         super.keyDown(with: event)
+    }
+
+    func scheduleScrollSelectionAboveBottomControlsIfNeeded() {
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollSelectionAboveBottomControlsIfNeeded(requireFocus: false)
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollSelectionAboveBottomControlsIfNeeded(requireFocus: false)
+            }
+        }
+    }
+
+    func scrollSelectionAboveBottomControlsIfNeeded(bottomClearance: CGFloat = 120, requireFocus: Bool = true) {
+        guard !requireFocus || window?.firstResponder === self else {
+            return
+        }
+
+        scrollRangeToVisible(selectedRange())
+
+        guard let layoutManager,
+              let textContainer,
+              let clipView = enclosingScrollView?.contentView else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        ensureBottomDocumentPadding(layoutManager: layoutManager, textContainer: textContainer)
+
+        let textLength = (string as NSString).length
+        guard textLength > 0,
+              var caretLineRect = caretLineRect(textLength: textLength, layoutManager: layoutManager, textContainer: textContainer) else {
+            return
+        }
+
+        let textOrigin = textContainerOrigin
+        caretLineRect.origin.x += textOrigin.x
+        caretLineRect.origin.y += textOrigin.y
+
+        let visibleRect = clipView.documentVisibleRect
+        let safeBottom = visibleRect.maxY - bottomClearance
+        guard caretLineRect.maxY > safeBottom else {
+            return
+        }
+
+        var targetOrigin = visibleRect.origin
+        targetOrigin.y += caretLineRect.maxY - safeBottom
+        targetOrigin.y = min(max(targetOrigin.y, 0), max(0, bounds.height - visibleRect.height))
+
+        clipView.scroll(to: targetOrigin)
+        enclosingScrollView?.reflectScrolledClipView(clipView)
+    }
+
+    private func ensureBottomDocumentPadding(layoutManager: NSLayoutManager, textContainer: NSTextContainer) {
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let desiredHeight = max(
+            enclosingScrollView?.contentSize.height ?? 0,
+            ceil(usedRect.maxY + textContainerOrigin.y + bottomDocumentPadding)
+        )
+
+        guard abs(frame.height - desiredHeight) > 1 else {
+            return
+        }
+
+        setFrameSize(NSSize(width: frame.width, height: desiredHeight))
+    }
+
+    private func caretLineRect(textLength: Int, layoutManager: NSLayoutManager, textContainer: NSTextContainer) -> NSRect? {
+        let selectionLocation = min(selectedRange().location, textLength)
+        if selectionLocation == textLength,
+           let lastScalar = string.unicodeScalars.last,
+           CharacterSet.newlines.contains(lastScalar) {
+            return layoutManager.extraLineFragmentRect
+        }
+
+        let characterIndex = min(selectionLocation, textLength - 1)
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
+        return layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
     }
 }
 
