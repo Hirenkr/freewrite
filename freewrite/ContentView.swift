@@ -2354,6 +2354,7 @@ struct StyledTextEditor: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 72, right: 0)
 
         let textView = FreewriteTextView()
         textView.delegate = context.coordinator
@@ -2392,6 +2393,7 @@ struct StyledTextEditor: NSViewRepresentable {
             let selectedRange = textView.selectedRange()
             textView.string = text
             textView.setSelectedRange(NSRange(location: min(selectedRange.location, text.utf16.count), length: 0))
+            context.coordinator.lastText = text
             context.coordinator.isApplyingProgrammaticChange = false
             shouldRestyle = true
         }
@@ -2437,9 +2439,11 @@ struct StyledTextEditor: NSViewRepresentable {
         @Binding var text: String
         var isApplyingProgrammaticChange = false
         var lastStyleKey = ""
+        var lastText: String
 
         init(text: Binding<String>) {
             _text = text
+            lastText = text.wrappedValue
         }
 
         func textDidChange(_ notification: Notification) {
@@ -2447,9 +2451,35 @@ struct StyledTextEditor: NSViewRepresentable {
                   let textView = notification.object as? FreewriteTextView else {
                 return
             }
-            text = textView.string
-            textView.applyFreewriteAttributesToAllText()
+            let newText = textView.string
+            let shouldRestyle = shouldRestyleAfterUserEdit(previousText: lastText, newText: newText)
+            lastText = newText
+            text = newText
+            if shouldRestyle {
+                textView.applyFreewriteAttributesToAllText()
+            }
             textView.applyTypingAttributes()
+        }
+
+        private func shouldRestyleAfterUserEdit(previousText: String, newText: String) -> Bool {
+            if previousText.isEmpty || newText.isEmpty {
+                return true
+            }
+
+            return firstLineBreakLocation(in: previousText) != firstLineBreakLocation(in: newText)
+                || newlineCount(in: previousText) != newlineCount(in: newText)
+        }
+
+        private func firstLineBreakLocation(in text: String) -> Int {
+            let nsText = text as NSString
+            let range = nsText.rangeOfCharacter(from: .newlines)
+            return range.location == NSNotFound ? nsText.length : range.location
+        }
+
+        private func newlineCount(in text: String) -> Int {
+            text.unicodeScalars.reduce(0) { count, scalar in
+                CharacterSet.newlines.contains(scalar) ? count + 1 : count
+            }
         }
 
         func styleKey(
