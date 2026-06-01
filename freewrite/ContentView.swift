@@ -2463,7 +2463,13 @@ struct StyledTextEditor: NSViewRepresentable {
                 textView.applyFreewriteAttributesToAllText()
             }
             textView.applyTypingAttributes()
-            textView.scrollSelectionAboveBottomControlsIfNeeded()
+            if textView.consumeDeferredSelectionScrollRequest() {
+                DispatchQueue.main.async { [weak textView] in
+                    textView?.scrollSelectionAboveBottomControlsIfNeeded()
+                }
+            } else {
+                textView.scrollSelectionAboveBottomControlsIfNeeded()
+            }
         }
 
         private func shouldRestyleAfterUserEdit(previousText: String, newText: String) -> Bool {
@@ -2510,6 +2516,7 @@ struct StyledTextEditor: NSViewRepresentable {
 final class FreewriteTextView: NSTextView {
     private static weak var activeEditor: FreewriteTextView?
     private let bottomDocumentPadding: CGFloat = 140
+    private var shouldDeferNextSelectionScroll = false
 
     var freewriteFont: NSFont = .systemFont(ofSize: 18)
     var freewriteTextColor: NSColor = .textColor
@@ -2634,13 +2641,13 @@ final class FreewriteTextView: NSTextView {
 
         if event.keyCode == 36 || event.keyCode == 76 {
             applyTypingAttributes()
+            shouldDeferNextSelectionScroll = true
             if event.modifierFlags.contains(.shift) {
                 insertText("\u{2028}", replacementRange: selectedRange())
             } else {
                 insertText("\n", replacementRange: selectedRange())
             }
             applyTypingAttributes()
-            scrollSelectionAboveBottomControlsIfNeeded()
             return
         }
 
@@ -2660,8 +2667,6 @@ final class FreewriteTextView: NSTextView {
         guard !requireFocus || window?.firstResponder === self else {
             return
         }
-
-        scrollRangeToVisible(selectedRange())
 
         guard let layoutManager,
               let textContainer,
@@ -2694,6 +2699,12 @@ final class FreewriteTextView: NSTextView {
 
         clipView.scroll(to: targetOrigin)
         enclosingScrollView?.reflectScrolledClipView(clipView)
+    }
+
+    func consumeDeferredSelectionScrollRequest() -> Bool {
+        let shouldDefer = shouldDeferNextSelectionScroll
+        shouldDeferNextSelectionScroll = false
+        return shouldDefer
     }
 
     private func ensureBottomDocumentPadding(layoutManager: NSLayoutManager, textContainer: NSTextContainer) {
